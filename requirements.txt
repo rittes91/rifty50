@@ -6,7 +6,7 @@ python-telegram-bot==20.3
 requests==2.31.0
 schedule==1.2.0
 ta==0.10.2
-SQLAlchemy==2.0.19
 python-dotenv==1.0.0
 Werkzeug==2.3.7
 gunicorn==21.2.0
+setuptools==68.0.0

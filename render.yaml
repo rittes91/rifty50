@@ -1,11 +1,12 @@
-# render.yaml - Render deployment configuration
+# render.yaml - Updated with proper Python version
 services:
   - type: web
-    name: nifty-analyzer
+    name: nifty50-analyzer
     env: python
-    buildCommand: "pip install -r requirements.txt"
-    startCommand: "python app.py"
+    region: ohio
     plan: free
+    buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
+    startCommand: "python app.py"
     envVars:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
