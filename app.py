@@ -1,6 +1,4 @@
 import os
-import pandas as pd
-import numpy as np
 import time
 from datetime import datetime
 import yfinance as yf
@@ -10,6 +8,7 @@ from flask import Flask, render_template, jsonify
 import logging
 import requests
 import warnings
+import json
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
@@ -21,15 +20,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class NiftyAnalyzer:
+class SimpleNiftyAnalyzer:
     def __init__(self):
-        # Top 20 Nifty stocks for faster processing
+        # Top 15 Nifty stocks for faster processing
         self.nifty_symbols = [
             "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", 
             "HINDUNILVR.NS", "ICICIBANK.NS", "SBIN.NS", "BHARTIARTL.NS",
             "ITC.NS", "KOTAKBANK.NS", "LT.NS", "AXISBANK.NS",
-            "ASIANPAINT.NS", "MARUTI.NS", "SUNPHARMA.NS", "TITAN.NS",
-            "ULTRACEMCO.NS", "NESTLEIND.NS", "POWERGRID.NS", "NTPC.NS"
+            "ASIANPAINT.NS", "MARUTI.NS", "SUNPHARMA.NS"
         ]
         
         self.telegram_token = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -37,7 +35,7 @@ class NiftyAnalyzer:
         
         # Initialize database
         self.init_database()
-        logger.info("NiftyAnalyzer initialized successfully")
+        logger.info("SimpleNiftyAnalyzer initialized successfully")
         
     def init_database(self):
         """Initialize SQLite database"""
@@ -67,7 +65,7 @@ class NiftyAnalyzer:
         """Fetch stock data using yfinance"""
         try:
             stock = yf.Ticker(symbol)
-            data = stock.history(period="30d", timeout=10)
+            data = stock.history(period="30d", timeout=15)
             
             if data.empty:
                 logger.warning(f"No data found for {symbol}")
@@ -79,20 +77,37 @@ class NiftyAnalyzer:
             return None
     
     def calculate_rsi(self, prices, period=14):
-        """Calculate RSI indicator"""
+        """Calculate RSI using pure Python"""
         try:
-            if len(prices) < period:
+            if len(prices) < period + 1:
                 return 50.0
-                
-            delta = prices.diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
             
-            # Avoid division by zero
-            rs = gain / (loss + 1e-10)
+            # Convert to list for easier handling
+            price_list = list(prices)
+            
+            # Calculate price changes
+            deltas = []
+            for i in range(1, len(price_list)):
+                deltas.append(price_list[i] - price_list[i-1])
+            
+            if len(deltas) < period:
+                return 50.0
+            
+            # Separate gains and losses
+            gains = [max(delta, 0) for delta in deltas]
+            losses = [abs(min(delta, 0)) for delta in deltas]
+            
+            # Calculate average gains and losses
+            avg_gain = sum(gains[-period:]) / period
+            avg_loss = sum(losses[-period:]) / period
+            
+            if avg_loss == 0:
+                return 100.0
+            
+            rs = avg_gain / avg_loss
             rsi = 100 - (100 / (1 + rs))
             
-            return float(rsi.iloc[-1]) if not pd.isna(rsi.iloc[-1]) else 50.0
+            return round(rsi, 2)
         except Exception as e:
             logger.error(f"RSI calculation error: {e}")
             return 50.0
@@ -100,12 +115,15 @@ class NiftyAnalyzer:
     def calculate_sma(self, prices, period=20):
         """Calculate Simple Moving Average"""
         try:
-            if len(prices) < period:
-                return prices.mean()
-            return float(prices.rolling(window=period).mean().iloc[-1])
+            price_list = list(prices)
+            if len(price_list) < period:
+                return sum(price_list) / len(price_list)
+            
+            recent_prices = price_list[-period:]
+            return sum(recent_prices) / period
         except Exception as e:
             logger.error(f"SMA calculation error: {e}")
-            return prices.iloc[-1] if len(prices) > 0 else 0.0
+            return prices[-1] if len(prices) > 0 else 0.0
     
     def analyze_stock(self, symbol):
         """Analyze single stock for signals"""
@@ -114,15 +132,23 @@ class NiftyAnalyzer:
             if data is None or data.empty or len(data) < 14:
                 return None
             
-            current_price = float(data['Close'].iloc[-1])
-            high_52w = float(data['High'].max())
-            low_52w = float(data['Low'].min())
+            # Extract price data
+            closes = list(data['Close'])
+            highs = list(data['High'])
+            lows = list(data['Low'])
+            volumes = list(data['Volume'])
+            
+            current_price = closes[-1]
+            high_52w = max(highs)
+            low_52w = min(lows)
             
             # Technical indicators
-            rsi = self.calculate_rsi(data['Close'])
-            sma_20 = self.calculate_sma(data['Close'], 20)
-            volume_avg = float(data['Volume'].rolling(window=10).mean().iloc[-1])
-            current_volume = float(data['Volume'].iloc[-1])
+            rsi = self.calculate_rsi(closes)
+            sma_20 = self.calculate_sma(closes, 20)
+            
+            # Volume analysis
+            avg_volume = sum(volumes[-10:]) / 10 if len(volumes) >= 10 else sum(volumes) / len(volumes)
+            current_volume = volumes[-1]
             
             signals = []
             
@@ -132,8 +158,8 @@ class NiftyAnalyzer:
                     'symbol': symbol,
                     'signal_type': 'BUY',
                     'strength': 'STRONG',
-                    'price': current_price,
-                    'description': f'RSI Oversold: {rsi:.1f}',
+                    'price': round(current_price, 2),
+                    'description': f'RSI Oversold: {rsi}',
                     'timestamp': datetime.now()
                 })
             elif rsi > 70:
@@ -141,40 +167,41 @@ class NiftyAnalyzer:
                     'symbol': symbol,
                     'signal_type': 'SELL',
                     'strength': 'STRONG',
-                    'price': current_price,
-                    'description': f'RSI Overbought: {rsi:.1f}',
+                    'price': round(current_price, 2),
+                    'description': f'RSI Overbought: {rsi}',
                     'timestamp': datetime.now()
                 })
             
             # Price vs Moving Average
-            if current_price > sma_20 * 1.02 and rsi < 60:
+            price_vs_sma = (current_price / sma_20 - 1) * 100
+            if price_vs_sma > 2 and rsi < 60:
                 signals.append({
                     'symbol': symbol,
                     'signal_type': 'BUY',
                     'strength': 'MEDIUM',
-                    'price': current_price,
-                    'description': f'Price above SMA20 with momentum',
+                    'price': round(current_price, 2),
+                    'description': f'Price {price_vs_sma:.1f}% above SMA20',
                     'timestamp': datetime.now()
                 })
-            elif current_price < sma_20 * 0.98 and rsi > 40:
+            elif price_vs_sma < -2 and rsi > 40:
                 signals.append({
                     'symbol': symbol,
                     'signal_type': 'SELL',
                     'strength': 'MEDIUM',
-                    'price': current_price,
-                    'description': f'Price below SMA20 with weakness',
+                    'price': round(current_price, 2),
+                    'description': f'Price {abs(price_vs_sma):.1f}% below SMA20',
                     'timestamp': datetime.now()
                 })
             
-            # High volume breakout
-            if current_volume > volume_avg * 1.5:
+            # High volume analysis
+            if current_volume > avg_volume * 1.5:
                 if current_price > high_52w * 0.95:
                     signals.append({
                         'symbol': symbol,
                         'signal_type': 'BUY',
                         'strength': 'MEDIUM',
-                        'price': current_price,
-                        'description': f'High volume near 52W high',
+                        'price': round(current_price, 2),
+                        'description': f'High volume breakout near 52W high',
                         'timestamp': datetime.now()
                     })
                 elif current_price < low_52w * 1.05:
@@ -182,8 +209,8 @@ class NiftyAnalyzer:
                         'symbol': symbol,
                         'signal_type': 'SELL',
                         'strength': 'MEDIUM',
-                        'price': current_price,
-                        'description': f'High volume near 52W low',
+                        'price': round(current_price, 2),
+                        'description': f'High volume breakdown near 52W low',
                         'timestamp': datetime.now()
                     })
             
@@ -282,7 +309,7 @@ class NiftyAnalyzer:
                     all_signals.extend(signals)
                 
                 processed += 1
-                time.sleep(1)  # Rate limiting
+                time.sleep(2)  # Rate limiting
                 
                 if processed % 5 == 0:
                     logger.info(f"Processed {processed}/{len(self.nifty_symbols)} stocks")
@@ -304,7 +331,7 @@ class NiftyAnalyzer:
 
 # Flask Web Interface
 app = Flask(__name__)
-analyzer = NiftyAnalyzer()
+analyzer = SimpleNiftyAnalyzer()
 
 @app.route('/')
 def dashboard():
@@ -351,7 +378,8 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
-        'telegram_configured': bool(analyzer.telegram_token and analyzer.telegram_chat_id)
+        'telegram_configured': bool(analyzer.telegram_token and analyzer.telegram_chat_id),
+        'version': '2.0'
     })
 
 @app.route('/api/stats')
@@ -387,8 +415,6 @@ def run_analysis_loop():
     
     while True:
         try:
-            current_time = datetime.now()
-            
             # Run analysis every 15 minutes
             analyzer.analyze_nifty_50()
             
@@ -401,7 +427,7 @@ def run_analysis_loop():
 
 def main():
     """Main function"""
-    logger.info("Starting Nifty 50 Technical Analysis App...")
+    logger.info("Starting Simple Nifty 50 Technical Analysis App...")
     
     # Start background analysis
     analysis_thread = threading.Thread(target=run_analysis_loop, daemon=True)
