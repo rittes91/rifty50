@@ -1,0 +1,40 @@
+🚀 RENDER DEPLOYMENT STEPS
+
+Prerequisites:
+✅ GitHub repository created
+✅ Telegram bot token ready
+✅ Chat ID ready
+
+Step 1: Render Account
+1. Go to: https://render.com
+2. Sign up with GitHub
+3. Authorize repository access
+
+Step 2: Create Web Service
+1. Click "New +" → "Web Service"
+2. Connect repository: nifty50-analyzer
+3. Settings:
+   - Name: nifty-analyzer
+   - Environment: Python 3
+   - Build Command: pip install -r requirements.txt
+   - Start Command: python app.py
+   - Plan: Free
+
+Step 3: Environment Variables (CRITICAL!)
+Add these in Environment tab:
+- TELEGRAM_BOT_TOKEN = your_bot_token
+- TELEGRAM_CHAT_ID = your_chat_id  
+- PYTHON_VERSION = 3.9.16
+
+Step 4: Deploy
+1. Click "Create Web Service"
+2. Wait 5-10 minutes for build
+3. Get URL: https://nifty-analyzer-xxx.onrender.com
+
+Step 5: Verify
+✅ Dashboard loads
+✅ API works: /api/latest-signals
+✅ Telegram bot responds
+✅ First analysis runs
+
+🎉 Your app will be live 24x7!

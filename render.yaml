@@ -1,0 +1,15 @@
+# render.yaml - Render deployment configuration
+services:
+  - type: web
+    name: nifty-analyzer
+    env: python
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python app.py"
+    plan: free
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: PYTHON_VERSION
+        value: "3.9.16"

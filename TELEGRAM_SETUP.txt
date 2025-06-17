@@ -1,0 +1,27 @@
+🤖 TELEGRAM BOT SETUP GUIDE
+
+Step 1: Create Bot
+1. Open Telegram
+2. Search: @BotFather
+3. Send: /newbot
+4. Bot name: Nifty 50 Analysis Bot
+5. Username: your_nifty50_bot
+6. Copy token: 123456789:ABCdefGHIjklMNOpqrsTUVwxyz
+
+Step 2: Get Chat ID
+Method A (Personal):
+1. Send /start to your bot
+2. Visit: https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates
+3. Find chat ID in response
+
+Method B (Channel - Recommended):
+1. Create channel: "Nifty 50 Signals"
+2. Add bot as admin
+3. Use: @your_channel_name
+
+Step 3: Test Bot
+Visit: https://api.telegram.org/bot<YOUR_TOKEN>/sendMessage?chat_id=<CHAT_ID>&text=Test
+
+✅ Save these values for Render deployment:
+TELEGRAM_BOT_TOKEN=your_token_here
+TELEGRAM_CHAT_ID=your_chat_id_here
