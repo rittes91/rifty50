@@ -8,20 +8,28 @@ import sqlite3
 import threading
 from flask import Flask, render_template, jsonify
 import logging
-import asyncio
 import requests
+import warnings
+
+# Suppress warnings
+warnings.filterwarnings('ignore')
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-class SimpleNiftyAnalyzer:
+class NiftyAnalyzer:
     def __init__(self):
+        # Top 20 Nifty stocks for faster processing
         self.nifty_symbols = [
-            "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", "HINDUNILVR.NS",
-            "ICICIBANK.NS", "SBIN.NS", "BHARTIARTL.NS", "ITC.NS", "KOTAKBANK.NS",
-            "LT.NS", "AXISBANK.NS", "ASIANPAINT.NS", "MARUTI.NS", "SUNPHARMA.NS",
-            "TITAN.NS", "ULTRACEMCO.NS", "NESTLEIND.NS", "POWERGRID.NS", "NTPC.NS"
+            "RELIANCE.NS", "TCS.NS", "HDFCBANK.NS", "INFY.NS", 
+            "HINDUNILVR.NS", "ICICIBANK.NS", "SBIN.NS", "BHARTIARTL.NS",
+            "ITC.NS", "KOTAKBANK.NS", "LT.NS", "AXISBANK.NS",
+            "ASIANPAINT.NS", "MARUTI.NS", "SUNPHARMA.NS", "TITAN.NS",
+            "ULTRACEMCO.NS", "NESTLEIND.NS", "POWERGRID.NS", "NTPC.NS"
         ]
         
         self.telegram_token = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -29,109 +37,189 @@ class SimpleNiftyAnalyzer:
         
         # Initialize database
         self.init_database()
+        logger.info("NiftyAnalyzer initialized successfully")
         
     def init_database(self):
         """Initialize SQLite database"""
-        conn = sqlite3.connect('nifty_analysis.db', check_same_thread=False)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS analysis_results (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                symbol TEXT,
-                signal_type TEXT,
-                strength TEXT,
-                price REAL,
-                timestamp DATETIME,
-                description TEXT
-            )
-        ''')
-        
-        conn.commit()
-        conn.close()
+        try:
+            conn = sqlite3.connect('nifty_analysis.db', check_same_thread=False)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS analysis_results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT,
+                    signal_type TEXT,
+                    strength TEXT,
+                    price REAL,
+                    timestamp DATETIME,
+                    description TEXT
+                )
+            ''')
+            
+            conn.commit()
+            conn.close()
+            logger.info("Database initialized successfully")
+        except Exception as e:
+            logger.error(f"Database initialization error: {e}")
         
     def fetch_stock_data(self, symbol: str):
         """Fetch stock data using yfinance"""
         try:
             stock = yf.Ticker(symbol)
-            data = stock.history(period="30d")
+            data = stock.history(period="30d", timeout=10)
+            
             if data.empty:
+                logger.warning(f"No data found for {symbol}")
                 return None
+                
             return data
         except Exception as e:
             logger.error(f"Error fetching data for {symbol}: {e}")
             return None
     
     def calculate_rsi(self, prices, period=14):
-        """Calculate RSI"""
+        """Calculate RSI indicator"""
         try:
+            if len(prices) < period:
+                return 50.0
+                
             delta = prices.diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-            rs = gain / loss
+            
+            # Avoid division by zero
+            rs = gain / (loss + 1e-10)
             rsi = 100 - (100 / (1 + rs))
-            return rsi.iloc[-1]
-        except:
-            return 50
+            
+            return float(rsi.iloc[-1]) if not pd.isna(rsi.iloc[-1]) else 50.0
+        except Exception as e:
+            logger.error(f"RSI calculation error: {e}")
+            return 50.0
+    
+    def calculate_sma(self, prices, period=20):
+        """Calculate Simple Moving Average"""
+        try:
+            if len(prices) < period:
+                return prices.mean()
+            return float(prices.rolling(window=period).mean().iloc[-1])
+        except Exception as e:
+            logger.error(f"SMA calculation error: {e}")
+            return prices.iloc[-1] if len(prices) > 0 else 0.0
     
     def analyze_stock(self, symbol):
-        """Simple analysis for one stock"""
+        """Analyze single stock for signals"""
         try:
             data = self.fetch_stock_data(symbol)
-            if data is None or data.empty:
+            if data is None or data.empty or len(data) < 14:
                 return None
             
-            current_price = data['Close'].iloc[-1]
-            rsi = self.calculate_rsi(data['Close'])
+            current_price = float(data['Close'].iloc[-1])
+            high_52w = float(data['High'].max())
+            low_52w = float(data['Low'].min())
             
-            # Simple RSI-based signals
+            # Technical indicators
+            rsi = self.calculate_rsi(data['Close'])
+            sma_20 = self.calculate_sma(data['Close'], 20)
+            volume_avg = float(data['Volume'].rolling(window=10).mean().iloc[-1])
+            current_volume = float(data['Volume'].iloc[-1])
+            
+            signals = []
+            
+            # RSI-based signals
             if rsi < 30:
-                return {
+                signals.append({
                     'symbol': symbol,
                     'signal_type': 'BUY',
                     'strength': 'STRONG',
                     'price': current_price,
-                    'description': f'RSI Oversold: {rsi:.2f}',
+                    'description': f'RSI Oversold: {rsi:.1f}',
                     'timestamp': datetime.now()
-                }
+                })
             elif rsi > 70:
-                return {
+                signals.append({
                     'symbol': symbol,
                     'signal_type': 'SELL',
                     'strength': 'STRONG',
                     'price': current_price,
-                    'description': f'RSI Overbought: {rsi:.2f}',
+                    'description': f'RSI Overbought: {rsi:.1f}',
                     'timestamp': datetime.now()
-                }
+                })
             
-            return None
+            # Price vs Moving Average
+            if current_price > sma_20 * 1.02 and rsi < 60:
+                signals.append({
+                    'symbol': symbol,
+                    'signal_type': 'BUY',
+                    'strength': 'MEDIUM',
+                    'price': current_price,
+                    'description': f'Price above SMA20 with momentum',
+                    'timestamp': datetime.now()
+                })
+            elif current_price < sma_20 * 0.98 and rsi > 40:
+                signals.append({
+                    'symbol': symbol,
+                    'signal_type': 'SELL',
+                    'strength': 'MEDIUM',
+                    'price': current_price,
+                    'description': f'Price below SMA20 with weakness',
+                    'timestamp': datetime.now()
+                })
+            
+            # High volume breakout
+            if current_volume > volume_avg * 1.5:
+                if current_price > high_52w * 0.95:
+                    signals.append({
+                        'symbol': symbol,
+                        'signal_type': 'BUY',
+                        'strength': 'MEDIUM',
+                        'price': current_price,
+                        'description': f'High volume near 52W high',
+                        'timestamp': datetime.now()
+                    })
+                elif current_price < low_52w * 1.05:
+                    signals.append({
+                        'symbol': symbol,
+                        'signal_type': 'SELL',
+                        'strength': 'MEDIUM',
+                        'price': current_price,
+                        'description': f'High volume near 52W low',
+                        'timestamp': datetime.now()
+                    })
+            
+            return signals if signals else None
             
         except Exception as e:
             logger.error(f"Error analyzing {symbol}: {e}")
             return None
     
-    def save_signal_to_db(self, signal):
-        """Save signal to database"""
-        if not signal:
+    def save_signals_to_db(self, signals):
+        """Save signals to database"""
+        if not signals:
             return
             
-        conn = sqlite3.connect('nifty_analysis.db', check_same_thread=False)
-        cursor = conn.cursor()
-        
-        cursor.execute('''
-            INSERT INTO analysis_results (symbol, signal_type, strength, price, timestamp, description)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (signal['symbol'], signal['signal_type'], signal['strength'], 
-              signal['price'], signal['timestamp'], signal['description']))
-        
-        conn.commit()
-        conn.close()
+        try:
+            conn = sqlite3.connect('nifty_analysis.db', check_same_thread=False)
+            cursor = conn.cursor()
+            
+            for signal in signals:
+                cursor.execute('''
+                    INSERT INTO analysis_results (symbol, signal_type, strength, price, timestamp, description)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (signal['symbol'], signal['signal_type'], signal['strength'], 
+                      signal['price'], signal['timestamp'], signal['description']))
+            
+            conn.commit()
+            conn.close()
+            logger.info(f"Saved {len(signals)} signals to database")
+        except Exception as e:
+            logger.error(f"Database save error: {e}")
     
     def send_telegram_message(self, message):
         """Send message to Telegram"""
         if not self.telegram_token or not self.telegram_chat_id:
-            logger.warning("Telegram not configured")
-            return
+            logger.warning("Telegram not configured - skipping notification")
+            return False
             
         try:
             url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
@@ -140,58 +228,83 @@ class SimpleNiftyAnalyzer:
                 'text': message,
                 'parse_mode': 'HTML'
             }
-            response = requests.post(url, data=data, timeout=10)
+            
+            response = requests.post(url, data=data, timeout=30)
             if response.status_code == 200:
                 logger.info("Telegram message sent successfully")
+                return True
             else:
-                logger.error(f"Telegram error: {response.text}")
+                logger.error(f"Telegram error: {response.status_code} - {response.text}")
+                return False
         except Exception as e:
             logger.error(f"Error sending Telegram message: {e}")
+            return False
+    
+    def format_signals_message(self, all_signals):
+        """Format signals for Telegram"""
+        if not all_signals:
+            return "🔍 <b>Nifty 50 Analysis</b>\n\nNo significant signals detected at this time."
+        
+        message = "🚀 <b>Nifty 50 Technical Signals</b>\n\n"
+        
+        buy_signals = [s for s in all_signals if s['signal_type'] == 'BUY']
+        sell_signals = [s for s in all_signals if s['signal_type'] == 'SELL']
+        
+        if buy_signals:
+            message += "📈 <b>BUY SIGNALS:</b>\n"
+            for signal in buy_signals[:5]:  # Limit to 5
+                symbol_clean = signal['symbol'].replace(".NS", "")
+                message += f"• <b>{symbol_clean}</b> - ₹{signal['price']:.2f}\n"
+                message += f"  📝 {signal['description']} ({signal['strength']})\n\n"
+        
+        if sell_signals:
+            message += "📉 <b>SELL SIGNALS:</b>\n"
+            for signal in sell_signals[:5]:  # Limit to 5
+                symbol_clean = signal['symbol'].replace(".NS", "")
+                message += f"• <b>{symbol_clean}</b> - ₹{signal['price']:.2f}\n"
+                message += f"  📝 {signal['description']} ({signal['strength']})\n\n"
+        
+        message += f"⏰ <i>Updated: {datetime.now().strftime('%d/%m/%Y %H:%M IST')}</i>\n"
+        message += f"📊 <i>Total: {len(buy_signals)} BUY, {len(sell_signals)} SELL</i>"
+        
+        return message
     
     def analyze_nifty_50(self):
         """Main analysis function"""
         logger.info("Starting Nifty 50 analysis...")
-        signals = []
+        all_signals = []
+        processed = 0
         
-        for symbol in self.nifty_symbols[:10]:  # Limit to 10 for faster execution
+        for symbol in self.nifty_symbols:
             try:
-                signal = self.analyze_stock(symbol)
-                if signal:
-                    signals.append(signal)
-                    self.save_signal_to_db(signal)
+                signals = self.analyze_stock(symbol)
+                if signals:
+                    all_signals.extend(signals)
                 
+                processed += 1
                 time.sleep(1)  # Rate limiting
+                
+                if processed % 5 == 0:
+                    logger.info(f"Processed {processed}/{len(self.nifty_symbols)} stocks")
                 
             except Exception as e:
                 logger.error(f"Error processing {symbol}: {e}")
                 continue
         
-        if signals:
-            message = self.format_signals_message(signals)
+        logger.info(f"Analysis complete. Found {len(all_signals)} signals from {processed} stocks.")
+        
+        if all_signals:
+            self.save_signals_to_db(all_signals)
+            message = self.format_signals_message(all_signals)
             self.send_telegram_message(message)
-            
-        logger.info(f"Analysis complete. Found {len(signals)} signals.")
-        return signals
-    
-    def format_signals_message(self, signals):
-        """Format signals for Telegram"""
-        if not signals:
-            return "🔍 <b>Nifty 50 Analysis</b>\n\nNo significant signals detected."
+        else:
+            logger.info("No signals generated this cycle")
         
-        message = "🚀 <b>Nifty 50 Technical Signals</b>\n\n"
-        
-        for signal in signals:
-            symbol_clean = signal['symbol'].replace(".NS", "")
-            emoji = "📈" if signal['signal_type'] == "BUY" else "📉"
-            message += f"{emoji} <b>{symbol_clean}</b> - ₹{signal['price']:.2f}\n"
-            message += f"📝 {signal['description']}\n\n"
-        
-        message += f"⏰ <i>Updated: {datetime.now().strftime('%d/%m/%Y %H:%M IST')}</i>"
-        return message
+        return all_signals
 
 # Flask Web Interface
 app = Flask(__name__)
-analyzer = SimpleNiftyAnalyzer()
+analyzer = NiftyAnalyzer()
 
 @app.route('/')
 def dashboard():
@@ -208,8 +321,9 @@ def get_latest_signals():
         cursor.execute('''
             SELECT symbol, signal_type, strength, price, timestamp, description
             FROM analysis_results
+            WHERE DATE(timestamp) >= DATE('now', '-1 days')
             ORDER BY timestamp DESC
-            LIMIT 50
+            LIMIT 100
         ''')
         
         results = cursor.fetchall()
@@ -234,33 +348,76 @@ def get_latest_signals():
 @app.route('/health')
 def health_check():
     """Health check endpoint"""
-    return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat()})
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': datetime.now().isoformat(),
+        'telegram_configured': bool(analyzer.telegram_token and analyzer.telegram_chat_id)
+    })
+
+@app.route('/api/stats')
+def get_stats():
+    """Get analysis statistics"""
+    try:
+        conn = sqlite3.connect('nifty_analysis.db', check_same_thread=False)
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT COUNT(*) FROM analysis_results WHERE DATE(timestamp) = DATE('now')")
+        today_count = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM analysis_results WHERE signal_type = 'BUY' AND DATE(timestamp) = DATE('now')")
+        buy_count = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM analysis_results WHERE signal_type = 'SELL' AND DATE(timestamp) = DATE('now')")
+        sell_count = cursor.fetchone()[0]
+        
+        conn.close()
+        
+        return jsonify({
+            'today_total': today_count,
+            'today_buy': buy_count,
+            'today_sell': sell_count
+        })
+    except Exception as e:
+        logger.error(f"Error getting stats: {e}")
+        return jsonify({'today_total': 0, 'today_buy': 0, 'today_sell': 0})
 
 def run_analysis_loop():
     """Run analysis in background"""
+    logger.info("Starting background analysis loop...")
+    
     while True:
         try:
+            current_time = datetime.now()
+            
+            # Run analysis every 15 minutes
             analyzer.analyze_nifty_50()
-            time.sleep(900)  # 15 minutes
+            
+            # Sleep for 15 minutes
+            time.sleep(900)
+            
         except Exception as e:
-            logger.error(f"Analysis error: {e}")
-            time.sleep(60)  # Wait 1 minute on error
+            logger.error(f"Analysis loop error: {e}")
+            time.sleep(300)  # Wait 5 minutes on error
 
 def main():
     """Main function"""
+    logger.info("Starting Nifty 50 Technical Analysis App...")
+    
     # Start background analysis
     analysis_thread = threading.Thread(target=run_analysis_loop, daemon=True)
     analysis_thread.start()
     
     # Run initial analysis
     try:
+        logger.info("Running initial analysis...")
         analyzer.analyze_nifty_50()
     except Exception as e:
         logger.error(f"Initial analysis error: {e}")
     
     # Start Flask app
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    logger.info(f"Starting Flask app on port {port}")
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
 
 if __name__ == "__main__":
     main()

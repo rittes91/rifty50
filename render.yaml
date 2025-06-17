@@ -1,16 +1,14 @@
-# render.yaml - Updated with proper Python version
+# render.yaml - Updated for Python 3.13 compatibility
 services:
   - type: web
     name: nifty50-analyzer
     env: python
     region: ohio
     plan: free
-    buildCommand: "pip install --upgrade pip && pip install -r requirements.txt"
+    buildCommand: "python -m pip install --upgrade pip setuptools wheel && pip install -r requirements.txt"
     startCommand: "python app.py"
     envVars:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_CHAT_ID
         sync: false
-      - key: PYTHON_VERSION
-        value: "3.9.16"
