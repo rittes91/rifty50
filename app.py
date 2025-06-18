@@ -9,6 +9,9 @@ import logging
 import requests
 import warnings
 import json
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+import asyncio
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
@@ -20,7 +23,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class SimpleNiftyAnalyzer:
+class InteractiveNiftyBot:
     def __init__(self):
         # Top 15 Nifty stocks for faster processing
         self.nifty_symbols = [
@@ -35,7 +38,12 @@ class SimpleNiftyAnalyzer:
         
         # Initialize database
         self.init_database()
-        logger.info("SimpleNiftyAnalyzer initialized successfully")
+        
+        # Initialize Telegram bot
+        if self.telegram_token:
+            self.setup_telegram_bot()
+        
+        logger.info("InteractiveNiftyBot initialized successfully")
         
     def init_database(self):
         """Initialize SQLite database"""
@@ -60,6 +68,272 @@ class SimpleNiftyAnalyzer:
             logger.info("Database initialized successfully")
         except Exception as e:
             logger.error(f"Database initialization error: {e}")
+    
+    def setup_telegram_bot(self):
+        """Setup Telegram bot with handlers"""
+        try:
+            self.application = Application.builder().token(self.telegram_token).build()
+            
+            # Add command handlers
+            self.application.add_handler(CommandHandler("start", self.start_command))
+            self.application.add_handler(CommandHandler("help", self.help_command))
+            self.application.add_handler(CommandHandler("signals", self.signals_command))
+            self.application.add_handler(CommandHandler("status", self.status_command))
+            self.application.add_handler(CommandHandler("analyze", self.analyze_command))
+            
+            # Add message handler for text
+            self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
+            
+            logger.info("Telegram bot handlers setup complete")
+            
+            # Start polling in background
+            threading.Thread(target=self.start_bot_polling, daemon=True).start()
+            
+        except Exception as e:
+            logger.error(f"Error setting up Telegram bot: {e}")
+    
+    def start_bot_polling(self):
+        """Start bot polling"""
+        try:
+            logger.info("Starting Telegram bot polling...")
+            asyncio.new_event_loop().run_until_complete(self.application.run_polling())
+        except Exception as e:
+            logger.error(f"Bot polling error: {e}")
+    
+    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /start command"""
+        try:
+            keyboard = [
+                [InlineKeyboardButton("📊 Latest Signals", callback_data='signals')],
+                [InlineKeyboardButton("🔍 Analyze Now", callback_data='analyze')],
+                [InlineKeyboardButton("📈 Dashboard", url='https://rifty50.onrender.com')],
+                [InlineKeyboardButton("ℹ️ Help", callback_data='help')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            message = """🚀 <b>Welcome to Nifty 50 Technical Analysis Bot!</b>
+
+📊 I provide real-time technical analysis and trading signals for Nifty 50 stocks.
+
+<b>Features:</b>
+• Real-time RSI, SMA, Volume analysis
+• Buy/Sell signal generation
+• 24x7 market monitoring
+• Automated notifications every 15 minutes
+
+<b>Commands:</b>
+/start - Show this menu
+/signals - Get latest signals
+/analyze - Run immediate analysis
+/status - Check bot status
+/help - Show help
+
+<b>Quick Actions:</b>"""
+            
+            await update.message.reply_text(message, parse_mode='HTML', reply_markup=reply_markup)
+            logger.info(f"Start command sent to user {update.effective_user.id}")
+            
+        except Exception as e:
+            logger.error(f"Error in start command: {e}")
+    
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /help command"""
+        try:
+            message = """ℹ️ <b>Nifty 50 Bot Help</b>
+
+<b>🤖 How it works:</b>
+• Analyzes top 15 Nifty 50 stocks every 15 minutes
+• Uses RSI, Moving Averages, and Volume indicators
+• Generates BUY/SELL signals with strength ratings
+
+<b>📊 Signal Types:</b>
+• <b>STRONG BUY:</b> RSI < 30 (Oversold)
+• <b>MEDIUM BUY:</b> Price above SMA20 with momentum
+• <b>STRONG SELL:</b> RSI > 70 (Overbought)
+• <b>MEDIUM SELL:</b> Price below SMA20 with weakness
+
+<b>⚡ Commands:</b>
+/start - Main menu
+/signals - Latest trading signals
+/analyze - Immediate analysis
+/status - Bot health check
+
+<b>🔗 Dashboard:</b>
+https://rifty50.onrender.com
+
+<b>⏰ Schedule:</b>
+• Analysis runs every 15 minutes
+• Notifications sent automatically
+• 24x7 market monitoring
+
+<i>Disclaimer: This is for educational purposes. Trade at your own risk.</i>"""
+            
+            await update.message.reply_text(message, parse_mode='HTML')
+            
+        except Exception as e:
+            logger.error(f"Error in help command: {e}")
+    
+    async def signals_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /signals command"""
+        try:
+            # Get latest signals from database
+            signals = self.get_latest_signals_from_db()
+            
+            if signals:
+                message = self.format_signals_message(signals)
+            else:
+                message = "🔍 <b>No recent signals found</b>\n\nRunning new analysis... Please wait 2-3 minutes and try again."
+                # Trigger immediate analysis
+                threading.Thread(target=self.analyze_nifty_50, daemon=True).start()
+            
+            await update.message.reply_text(message, parse_mode='HTML')
+            
+        except Exception as e:
+            logger.error(f"Error in signals command: {e}")
+            await update.message.reply_text("❌ Error getting signals. Please try again.")
+    
+    async def analyze_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /analyze command"""
+        try:
+            await update.message.reply_text("🔍 <b>Starting immediate analysis...</b>\n\n⏳ Please wait 2-3 minutes for results.", parse_mode='HTML')
+            
+            # Run analysis in background
+            threading.Thread(target=self.run_immediate_analysis, args=(update.effective_chat.id,), daemon=True).start()
+            
+        except Exception as e:
+            logger.error(f"Error in analyze command: {e}")
+    
+    async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /status command"""
+        try:
+            # Get bot status
+            conn = sqlite3.connect('nifty_analysis.db', check_same_thread=False)
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT COUNT(*) FROM analysis_results WHERE DATE(timestamp) = DATE('now')")
+            today_signals = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT timestamp FROM analysis_results ORDER BY timestamp DESC LIMIT 1")
+            last_analysis = cursor.fetchone()
+            
+            conn.close()
+            
+            last_time = "Never" if not last_analysis else last_analysis[0]
+            
+            message = f"""📊 <b>Bot Status Report</b>
+
+🤖 <b>Bot:</b> Online ✅
+🌐 <b>App:</b> Running ✅  
+📡 <b>Data Source:</b> Yahoo Finance ✅
+💾 <b>Database:</b> Active ✅
+
+📈 <b>Today's Activity:</b>
+• Signals Generated: {today_signals}
+• Last Analysis: {last_time}
+• Next Analysis: Every 15 minutes
+
+🔗 <b>Web Dashboard:</b>
+https://rifty50.onrender.com
+
+⏰ <b>Server Time:</b> {datetime.now().strftime('%d/%m/%Y %H:%M:%S IST')}
+
+<i>All systems operational! 🚀</i>"""
+            
+            await update.message.reply_text(message, parse_mode='HTML')
+            
+        except Exception as e:
+            logger.error(f"Error in status command: {e}")
+    
+    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle regular text messages"""
+        try:
+            text = update.message.text.lower()
+            
+            if 'signals' in text or 'signal' in text:
+                await self.signals_command(update, context)
+            elif 'analyze' in text or 'analysis' in text:
+                await self.analyze_command(update, context)
+            elif 'help' in text:
+                await self.help_command(update, context)
+            elif 'status' in text:
+                await self.status_command(update, context)
+            else:
+                message = """🤖 I understand these commands:
+
+• <b>"signals"</b> - Get latest trading signals
+• <b>"analyze"</b> - Run immediate analysis  
+• <b>"help"</b> - Show help information
+• <b>"status"</b> - Check bot status
+
+Or use: /start for main menu"""
+                
+                await update.message.reply_text(message, parse_mode='HTML')
+                
+        except Exception as e:
+            logger.error(f"Error handling message: {e}")
+    
+    def run_immediate_analysis(self, chat_id):
+        """Run immediate analysis and send results"""
+        try:
+            signals = self.analyze_nifty_50()
+            
+            if signals:
+                message = "✅ <b>Analysis Complete!</b>\n\n" + self.format_signals_message(signals)
+            else:
+                message = "✅ <b>Analysis Complete!</b>\n\n🔍 No significant signals detected at this time."
+            
+            # Send result back to user
+            self.send_message_to_chat(chat_id, message)
+            
+        except Exception as e:
+            logger.error(f"Error in immediate analysis: {e}")
+    
+    def send_message_to_chat(self, chat_id, message):
+        """Send message to specific chat"""
+        try:
+            url = f"https://api.telegram.org/bot{self.telegram_token}/sendMessage"
+            data = {
+                'chat_id': chat_id,
+                'text': message,
+                'parse_mode': 'HTML'
+            }
+            requests.post(url, data=data, timeout=30)
+        except Exception as e:
+            logger.error(f"Error sending message to chat: {e}")
+    
+    def get_latest_signals_from_db(self):
+        """Get latest signals from database"""
+        try:
+            conn = sqlite3.connect('nifty_analysis.db', check_same_thread=False)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT symbol, signal_type, strength, price, timestamp, description
+                FROM analysis_results
+                WHERE DATE(timestamp) >= DATE('now', '-1 days')
+                ORDER BY timestamp DESC
+                LIMIT 20
+            ''')
+            
+            results = cursor.fetchall()
+            conn.close()
+            
+            signals = []
+            for row in results:
+                signals.append({
+                    'symbol': row[0],
+                    'signal_type': row[1],
+                    'strength': row[2],
+                    'price': row[3],
+                    'timestamp': row[4],
+                    'description': row[5]
+                })
+            
+            return signals
+            
+        except Exception as e:
+            logger.error(f"Error getting signals from DB: {e}")
+            return []
         
     def fetch_stock_data(self, symbol: str):
         """Fetch stock data using yfinance"""
@@ -193,27 +467,6 @@ class SimpleNiftyAnalyzer:
                     'timestamp': datetime.now()
                 })
             
-            # High volume analysis
-            if current_volume > avg_volume * 1.5:
-                if current_price > high_52w * 0.95:
-                    signals.append({
-                        'symbol': symbol,
-                        'signal_type': 'BUY',
-                        'strength': 'MEDIUM',
-                        'price': round(current_price, 2),
-                        'description': f'High volume breakout near 52W high',
-                        'timestamp': datetime.now()
-                    })
-                elif current_price < low_52w * 1.05:
-                    signals.append({
-                        'symbol': symbol,
-                        'signal_type': 'SELL',
-                        'strength': 'MEDIUM',
-                        'price': round(current_price, 2),
-                        'description': f'High volume breakdown near 52W low',
-                        'timestamp': datetime.now()
-                    })
-            
             return signals if signals else None
             
         except Exception as e:
@@ -331,7 +584,7 @@ class SimpleNiftyAnalyzer:
 
 # Flask Web Interface
 app = Flask(__name__)
-analyzer = SimpleNiftyAnalyzer()
+analyzer = InteractiveNiftyBot()
 
 @app.route('/')
 def dashboard():
@@ -342,32 +595,20 @@ def dashboard():
 def get_latest_signals():
     """API endpoint for latest signals"""
     try:
-        conn = sqlite3.connect('nifty_analysis.db', check_same_thread=False)
-        cursor = conn.cursor()
+        signals = analyzer.get_latest_signals_from_db()
         
-        cursor.execute('''
-            SELECT symbol, signal_type, strength, price, timestamp, description
-            FROM analysis_results
-            WHERE DATE(timestamp) >= DATE('now', '-1 days')
-            ORDER BY timestamp DESC
-            LIMIT 100
-        ''')
-        
-        results = cursor.fetchall()
-        conn.close()
-        
-        signals = []
-        for row in results:
-            signals.append({
-                'symbol': row[0].replace('.NS', ''),
-                'signal_type': row[1],
-                'strength': row[2],
-                'price': row[3],
-                'timestamp': row[4],
-                'description': row[5]
+        formatted_signals = []
+        for signal in signals:
+            formatted_signals.append({
+                'symbol': signal['symbol'].replace('.NS', ''),
+                'signal_type': signal['signal_type'],
+                'strength': signal['strength'],
+                'price': signal['price'],
+                'timestamp': signal['timestamp'],
+                'description': signal['description']
             })
         
-        return jsonify(signals)
+        return jsonify(formatted_signals)
     except Exception as e:
         logger.error(f"Error getting signals: {e}")
         return jsonify([])
@@ -379,7 +620,7 @@ def health_check():
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
         'telegram_configured': bool(analyzer.telegram_token and analyzer.telegram_chat_id),
-        'version': '2.0'
+        'version': '3.0 - Interactive'
     })
 
 @app.route('/api/stats')
@@ -427,7 +668,7 @@ def run_analysis_loop():
 
 def main():
     """Main function"""
-    logger.info("Starting Simple Nifty 50 Technical Analysis App...")
+    logger.info("Starting Interactive Nifty 50 Bot v3.0...")
     
     # Start background analysis
     analysis_thread = threading.Thread(target=run_analysis_loop, daemon=True)

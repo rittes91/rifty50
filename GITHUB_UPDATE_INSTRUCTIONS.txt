@@ -1,0 +1,37 @@
+URGENT: Manual GitHub Update Required
+
+Git push working locally but not reflecting on GitHub.
+Please manually update these files on GitHub:
+
+1. requirements.txt - Replace with:
+Flask==3.0.0
+yfinance==0.2.28
+pandas>=2.2.0
+numpy>=1.26.0
+python-telegram-bot==20.8
+requests==2.31.0
+python-dotenv==1.0.0
+Werkzeug==3.0.1
+gunicorn==21.2.0
+
+2. render.yaml - Replace with:
+# render.yaml - Optimized for Python 3.13
+services:
+  - type: web
+    name: nifty50-analyzer
+    env: python
+    region: ohio
+    plan: free
+    buildCommand: "python -m pip install --upgrade pip && pip install --only-binary=all -r requirements.txt"
+    startCommand: "python app.py"
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+
+3. Add runtime.txt with content:
+python-3.13.4
+
+These changes will fix the pandas compilation error.
+After updating, redeploy on Render.
