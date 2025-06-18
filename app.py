@@ -9,8 +9,6 @@ import logging
 import requests
 import warnings
 import json
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import asyncio
 
 # Suppress warnings
@@ -23,7 +21,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class InteractiveNiftyBot:
+class SimpleNiftyAnalyzer:
     def __init__(self):
         # Top 15 Nifty stocks for faster processing
         self.nifty_symbols = [
@@ -39,11 +37,11 @@ class InteractiveNiftyBot:
         # Initialize database
         self.init_database()
         
-        # Initialize Telegram bot
-        if self.telegram_token:
-            self.setup_telegram_bot()
+        # Start background bot if Telegram configured
+        if self.telegram_token and self.telegram_chat_id:
+            threading.Thread(target=self.setup_telegram_bot, daemon=True).start()
         
-        logger.info("InteractiveNiftyBot initialized successfully")
+        logger.info("SimpleNiftyAnalyzer initialized successfully")
         
     def init_database(self):
         """Initialize SQLite database"""
@@ -70,50 +68,78 @@ class InteractiveNiftyBot:
             logger.error(f"Database initialization error: {e}")
     
     def setup_telegram_bot(self):
-        """Setup Telegram bot with handlers"""
+        """Setup Telegram bot with simple webhook check"""
         try:
-            self.application = Application.builder().token(self.telegram_token).build()
+            # Set webhook to check bot status
+            webhook_url = f"https://api.telegram.org/bot{self.telegram_token}/getMe"
+            response = requests.get(webhook_url, timeout=10)
             
-            # Add command handlers
-            self.application.add_handler(CommandHandler("start", self.start_command))
-            self.application.add_handler(CommandHandler("help", self.help_command))
-            self.application.add_handler(CommandHandler("signals", self.signals_command))
-            self.application.add_handler(CommandHandler("status", self.status_command))
-            self.application.add_handler(CommandHandler("analyze", self.analyze_command))
-            
-            # Add message handler for text
-            self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
-            
-            logger.info("Telegram bot handlers setup complete")
-            
-            # Start polling in background
-            threading.Thread(target=self.start_bot_polling, daemon=True).start()
-            
+            if response.status_code == 200:
+                bot_info = response.json()
+                logger.info(f"Telegram bot connected: {bot_info.get('result', {}).get('username', 'Unknown')}")
+                
+                # Send startup message
+                self.send_telegram_message("🚀 <b>Nifty 50 Bot Started!</b>\n\n✅ Connected successfully\n⏰ Analysis will begin in 15 minutes\n\n<i>Commands: /start, /signals, /analyze, /help</i>")
+                
+                # Start command monitoring
+                self.start_command_monitoring()
+            else:
+                logger.error("Failed to connect to Telegram bot")
+                
         except Exception as e:
-            logger.error(f"Error setting up Telegram bot: {e}")
+            logger.error(f"Telegram setup error: {e}")
     
-    def start_bot_polling(self):
-        """Start bot polling"""
+    def start_command_monitoring(self):
+        """Monitor for commands using simple polling"""
         try:
-            logger.info("Starting Telegram bot polling...")
-            asyncio.new_event_loop().run_until_complete(self.application.run_polling())
-        except Exception as e:
-            logger.error(f"Bot polling error: {e}")
-    
-    async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /start command"""
-        try:
-            keyboard = [
-                [InlineKeyboardButton("📊 Latest Signals", callback_data='signals')],
-                [InlineKeyboardButton("🔍 Analyze Now", callback_data='analyze')],
-                [InlineKeyboardButton("📈 Dashboard", url='https://rifty50.onrender.com')],
-                [InlineKeyboardButton("ℹ️ Help", callback_data='help')]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
+            last_update_id = 0
             
-            message = """🚀 <b>Welcome to Nifty 50 Technical Analysis Bot!</b>
+            while True:
+                try:
+                    # Get updates
+                    url = f"https://api.telegram.org/bot{self.telegram_token}/getUpdates"
+                    params = {'offset': last_update_id + 1, 'timeout': 10}
+                    
+                    response = requests.get(url, params=params, timeout=15)
+                    
+                    if response.status_code == 200:
+                        data = response.json()
+                        
+                        for update in data.get('result', []):
+                            last_update_id = update['update_id']
+                            
+                            if 'message' in update:
+                                self.handle_telegram_message(update['message'])
+                    
+                    time.sleep(2)  # Small delay between polls
+                    
+                except Exception as e:
+                    logger.error(f"Command monitoring error: {e}")
+                    time.sleep(10)  # Wait longer on error
+                    
+        except Exception as e:
+            logger.error(f"Command monitoring setup error: {e}")
+    
+    def handle_telegram_message(self, message):
+        """Handle incoming Telegram messages"""
+        try:
+            text = message.get('text', '').lower()
+            chat_id = message.get('chat', {}).get('id')
+            
+            if not text or not chat_id:
+                return
+            
+            # Handle commands
+            if text.startswith('/start') or 'start' in text:
+                response = """🚀 <b>Welcome to Nifty 50 Technical Analysis Bot!</b>
 
 📊 I provide real-time technical analysis and trading signals for Nifty 50 stocks.
+
+<b>Commands:</b>
+• <b>/signals</b> - Get latest trading signals
+• <b>/analyze</b> - Run immediate analysis
+• <b>/status</b> - Check bot status
+• <b>/help</b> - Show detailed help
 
 <b>Features:</b>
 • Real-time RSI, SMA, Volume analysis
@@ -121,106 +147,45 @@ class InteractiveNiftyBot:
 • 24x7 market monitoring
 • Automated notifications every 15 minutes
 
-<b>Commands:</b>
-/start - Show this menu
-/signals - Get latest signals
-/analyze - Run immediate analysis
-/status - Check bot status
-/help - Show help
+<b>Dashboard:</b> https://rifty50.onrender.com
 
-<b>Quick Actions:</b>"""
-            
-            await update.message.reply_text(message, parse_mode='HTML', reply_markup=reply_markup)
-            logger.info(f"Start command sent to user {update.effective_user.id}")
-            
-        except Exception as e:
-            logger.error(f"Error in start command: {e}")
-    
-    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /help command"""
-        try:
-            message = """ℹ️ <b>Nifty 50 Bot Help</b>
-
-<b>🤖 How it works:</b>
-• Analyzes top 15 Nifty 50 stocks every 15 minutes
-• Uses RSI, Moving Averages, and Volume indicators
-• Generates BUY/SELL signals with strength ratings
-
-<b>📊 Signal Types:</b>
-• <b>STRONG BUY:</b> RSI < 30 (Oversold)
-• <b>MEDIUM BUY:</b> Price above SMA20 with momentum
-• <b>STRONG SELL:</b> RSI > 70 (Overbought)
-• <b>MEDIUM SELL:</b> Price below SMA20 with weakness
-
-<b>⚡ Commands:</b>
-/start - Main menu
-/signals - Latest trading signals
-/analyze - Immediate analysis
-/status - Bot health check
-
-<b>🔗 Dashboard:</b>
-https://rifty50.onrender.com
-
-<b>⏰ Schedule:</b>
-• Analysis runs every 15 minutes
-• Notifications sent automatically
-• 24x7 market monitoring
-
-<i>Disclaimer: This is for educational purposes. Trade at your own risk.</i>"""
-            
-            await update.message.reply_text(message, parse_mode='HTML')
-            
-        except Exception as e:
-            logger.error(f"Error in help command: {e}")
-    
-    async def signals_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /signals command"""
-        try:
-            # Get latest signals from database
-            signals = self.get_latest_signals_from_db()
-            
-            if signals:
-                message = self.format_signals_message(signals)
-            else:
-                message = "🔍 <b>No recent signals found</b>\n\nRunning new analysis... Please wait 2-3 minutes and try again."
-                # Trigger immediate analysis
-                threading.Thread(target=self.analyze_nifty_50, daemon=True).start()
-            
-            await update.message.reply_text(message, parse_mode='HTML')
-            
-        except Exception as e:
-            logger.error(f"Error in signals command: {e}")
-            await update.message.reply_text("❌ Error getting signals. Please try again.")
-    
-    async def analyze_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /analyze command"""
-        try:
-            await update.message.reply_text("🔍 <b>Starting immediate analysis...</b>\n\n⏳ Please wait 2-3 minutes for results.", parse_mode='HTML')
-            
-            # Run analysis in background
-            threading.Thread(target=self.run_immediate_analysis, args=(update.effective_chat.id,), daemon=True).start()
-            
-        except Exception as e:
-            logger.error(f"Error in analyze command: {e}")
-    
-    async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /status command"""
-        try:
-            # Get bot status
-            conn = sqlite3.connect('nifty_analysis.db', check_same_thread=False)
-            cursor = conn.cursor()
-            
-            cursor.execute("SELECT COUNT(*) FROM analysis_results WHERE DATE(timestamp) = DATE('now')")
-            today_signals = cursor.fetchone()[0]
-            
-            cursor.execute("SELECT timestamp FROM analysis_results ORDER BY timestamp DESC LIMIT 1")
-            last_analysis = cursor.fetchone()
-            
-            conn.close()
-            
-            last_time = "Never" if not last_analysis else last_analysis[0]
-            
-            message = f"""📊 <b>Bot Status Report</b>
+<i>Just type 'signals' to get latest analysis!</i>"""
+                
+                self.send_message_to_chat(chat_id, response)
+                
+            elif text.startswith('/signals') or 'signals' in text or 'signal' in text:
+                signals = self.get_latest_signals_from_db()
+                if signals:
+                    message_text = self.format_signals_message(signals)
+                else:
+                    message_text = "🔍 <b>No recent signals found</b>\n\nRunning new analysis... Please wait 2-3 minutes and try again."
+                    # Trigger immediate analysis
+                    threading.Thread(target=self.analyze_nifty_50, daemon=True).start()
+                
+                self.send_message_to_chat(chat_id, message_text)
+                
+            elif text.startswith('/analyze') or 'analyze' in text or 'analysis' in text:
+                self.send_message_to_chat(chat_id, "🔍 <b>Starting immediate analysis...</b>\n\n⏳ Please wait 2-3 minutes for results.")
+                
+                # Run analysis in background
+                threading.Thread(target=self.run_immediate_analysis, args=(chat_id,), daemon=True).start()
+                
+            elif text.startswith('/status') or 'status' in text:
+                # Get bot status
+                conn = sqlite3.connect('nifty_analysis.db', check_same_thread=False)
+                cursor = conn.cursor()
+                
+                cursor.execute("SELECT COUNT(*) FROM analysis_results WHERE DATE(timestamp) = DATE('now')")
+                today_signals = cursor.fetchone()[0]
+                
+                cursor.execute("SELECT timestamp FROM analysis_results ORDER BY timestamp DESC LIMIT 1")
+                last_analysis = cursor.fetchone()
+                
+                conn.close()
+                
+                last_time = "Never" if not last_analysis else last_analysis[0]
+                
+                status_message = f"""📊 <b>Bot Status Report</b>
 
 🤖 <b>Bot:</b> Online ✅
 🌐 <b>App:</b> Running ✅  
@@ -238,36 +203,53 @@ https://rifty50.onrender.com
 ⏰ <b>Server Time:</b> {datetime.now().strftime('%d/%m/%Y %H:%M:%S IST')}
 
 <i>All systems operational! 🚀</i>"""
-            
-            await update.message.reply_text(message, parse_mode='HTML')
-            
-        except Exception as e:
-            logger.error(f"Error in status command: {e}")
-    
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle regular text messages"""
-        try:
-            text = update.message.text.lower()
-            
-            if 'signals' in text or 'signal' in text:
-                await self.signals_command(update, context)
-            elif 'analyze' in text or 'analysis' in text:
-                await self.analyze_command(update, context)
-            elif 'help' in text:
-                await self.help_command(update, context)
-            elif 'status' in text:
-                await self.status_command(update, context)
-            else:
-                message = """🤖 I understand these commands:
+                
+                self.send_message_to_chat(chat_id, status_message)
+                
+            elif text.startswith('/help') or 'help' in text:
+                help_message = """ℹ️ <b>Nifty 50 Bot Help</b>
 
-• <b>"signals"</b> - Get latest trading signals
-• <b>"analyze"</b> - Run immediate analysis  
-• <b>"help"</b> - Show help information
-• <b>"status"</b> - Check bot status
+<b>🤖 How it works:</b>
+• Analyzes top 15 Nifty 50 stocks every 15 minutes
+• Uses RSI, Moving Averages, and Volume indicators
+• Generates BUY/SELL signals with strength ratings
+
+<b>📊 Signal Types:</b>
+• <b>STRONG BUY:</b> RSI < 30 (Oversold)
+• <b>MEDIUM BUY:</b> Price above SMA20 with momentum
+• <b>STRONG SELL:</b> RSI > 70 (Overbought)
+• <b>MEDIUM SELL:</b> Price below SMA20 with weakness
+
+<b>⚡ Commands:</b>
+• /start - Main menu
+• /signals - Latest trading signals
+• /analyze - Immediate analysis
+• /status - Bot health check
+
+<b>🔗 Dashboard:</b>
+https://rifty50.onrender.com
+
+<b>⏰ Schedule:</b>
+• Analysis runs every 15 minutes
+• Notifications sent automatically
+• 24x7 market monitoring
+
+<i>Disclaimer: This is for educational purposes. Trade at your own risk.</i>"""
+                
+                self.send_message_to_chat(chat_id, help_message)
+                
+            else:
+                # Unknown command
+                unknown_msg = """🤖 <b>I understand these commands:</b>
+
+• Type <b>"signals"</b> - Get latest trading signals
+• Type <b>"analyze"</b> - Run immediate analysis  
+• Type <b>"help"</b> - Show help information
+• Type <b>"status"</b> - Check bot status
 
 Or use: /start for main menu"""
                 
-                await update.message.reply_text(message, parse_mode='HTML')
+                self.send_message_to_chat(chat_id, unknown_msg)
                 
         except Exception as e:
             logger.error(f"Error handling message: {e}")
@@ -297,7 +279,11 @@ Or use: /start for main menu"""
                 'text': message,
                 'parse_mode': 'HTML'
             }
-            requests.post(url, data=data, timeout=30)
+            response = requests.post(url, data=data, timeout=30)
+            if response.status_code == 200:
+                logger.info(f"Message sent to chat {chat_id}")
+            else:
+                logger.error(f"Failed to send message: {response.text}")
         except Exception as e:
             logger.error(f"Error sending message to chat: {e}")
     
@@ -584,7 +570,7 @@ Or use: /start for main menu"""
 
 # Flask Web Interface
 app = Flask(__name__)
-analyzer = InteractiveNiftyBot()
+analyzer = SimpleNiftyAnalyzer()
 
 @app.route('/')
 def dashboard():
@@ -620,7 +606,7 @@ def health_check():
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
         'telegram_configured': bool(analyzer.telegram_token and analyzer.telegram_chat_id),
-        'version': '3.0 - Interactive'
+        'version': '3.1 - Fixed Bot'
     })
 
 @app.route('/api/stats')
@@ -668,7 +654,7 @@ def run_analysis_loop():
 
 def main():
     """Main function"""
-    logger.info("Starting Interactive Nifty 50 Bot v3.0...")
+    logger.info("Starting Simple Nifty 50 Bot v3.1...")
     
     # Start background analysis
     analysis_thread = threading.Thread(target=run_analysis_loop, daemon=True)
