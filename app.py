@@ -9,7 +9,6 @@ import logging
 import requests
 import warnings
 import json
-import asyncio
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
@@ -70,7 +69,6 @@ class SimpleNiftyAnalyzer:
     def setup_telegram_bot(self):
         """Setup Telegram bot with simple webhook check"""
         try:
-            # Set webhook to check bot status
             webhook_url = f"https://api.telegram.org/bot{self.telegram_token}/getMe"
             response = requests.get(webhook_url, timeout=10)
             
@@ -78,10 +76,8 @@ class SimpleNiftyAnalyzer:
                 bot_info = response.json()
                 logger.info(f"Telegram bot connected: {bot_info.get('result', {}).get('username', 'Unknown')}")
                 
-                # Send startup message
-                self.send_telegram_message("🚀 <b>Nifty 50 Bot Started!</b>\n\n✅ Connected successfully\n⏰ Analysis will begin in 15 minutes\n\n<i>Commands: /start, /signals, /analyze, /help</i>")
+                self.send_telegram_message("🚀 <b>Enhanced Nifty Bot Started!</b>\n\n✅ Ready for trading signals\n\n<i>Commands: /start, /signals</i>")
                 
-                # Start command monitoring
                 self.start_command_monitoring()
             else:
                 logger.error("Failed to connect to Telegram bot")
@@ -96,7 +92,6 @@ class SimpleNiftyAnalyzer:
             
             while True:
                 try:
-                    # Get updates
                     url = f"https://api.telegram.org/bot{self.telegram_token}/getUpdates"
                     params = {'offset': last_update_id + 1, 'timeout': 10}
                     
@@ -111,11 +106,11 @@ class SimpleNiftyAnalyzer:
                             if 'message' in update:
                                 self.handle_telegram_message(update['message'])
                     
-                    time.sleep(2)  # Small delay between polls
+                    time.sleep(2)
                     
                 except Exception as e:
                     logger.error(f"Command monitoring error: {e}")
-                    time.sleep(10)  # Wait longer on error
+                    time.sleep(10)
                     
         except Exception as e:
             logger.error(f"Command monitoring setup error: {e}")
@@ -123,132 +118,51 @@ class SimpleNiftyAnalyzer:
     def handle_telegram_message(self, message):
         """Handle incoming Telegram messages"""
         try:
-            text = message.get('text', '').lower()
+            text = message.get('text', '').strip()
             chat_id = message.get('chat', {}).get('id')
             
             if not text or not chat_id:
                 return
             
-            # Handle commands
-            if text.startswith('/start') or 'start' in text:
-                response = """🚀 <b>Welcome to Nifty 50 Technical Analysis Bot!</b>
+            text_lower = text.lower()
+            
+            if text.startswith('/start') or text_lower == 'start':
+                response = """🚀 <b>Nifty 50 Trading Bot!</b>
 
-📊 I provide real-time technical analysis and trading signals for Nifty 50 stocks.
+📊 <b>Features:</b>
+• Real-time technical analysis
+• RSI, SMA indicators
+• Automated signals
 
 <b>Commands:</b>
-• <b>/signals</b> - Get latest trading signals
-• <b>/analyze</b> - Run immediate analysis
-• <b>/status</b> - Check bot status
-• <b>/help</b> - Show detailed help
+• /signals - Latest analysis
+• /analyze - Run analysis
 
-<b>Features:</b>
-• Real-time RSI, SMA, Volume analysis
-• Buy/Sell signal generation
-• 24x7 market monitoring
-• Automated notifications every 15 minutes
-
-<b>Dashboard:</b> https://rifty50.onrender.com
-
-<i>Just type 'signals' to get latest analysis!</i>"""
+<i>Try: "/signals"</i>"""
                 
                 self.send_message_to_chat(chat_id, response)
                 
-            elif text.startswith('/signals') or 'signals' in text or 'signal' in text:
+            elif text.startswith('/signals') or 'signals' in text_lower:
                 signals = self.get_latest_signals_from_db()
                 if signals:
                     message_text = self.format_signals_message(signals)
                 else:
-                    message_text = "🔍 <b>No recent signals found</b>\n\nRunning new analysis... Please wait 2-3 minutes and try again."
-                    # Trigger immediate analysis
+                    message_text = "🔍 <b>Running analysis...</b>\n\nPlease wait."
                     threading.Thread(target=self.analyze_nifty_50, daemon=True).start()
                 
                 self.send_message_to_chat(chat_id, message_text)
                 
-            elif text.startswith('/analyze') or 'analyze' in text or 'analysis' in text:
-                self.send_message_to_chat(chat_id, "🔍 <b>Starting immediate analysis...</b>\n\n⏳ Please wait 2-3 minutes for results.")
-                
-                # Run analysis in background
+            elif text.startswith('/analyze') or 'analyze' in text_lower:
+                self.send_message_to_chat(chat_id, "🔍 <b>Starting analysis...</b>")
                 threading.Thread(target=self.run_immediate_analysis, args=(chat_id,), daemon=True).start()
                 
-            elif text.startswith('/status') or 'status' in text:
-                # Get bot status
-                conn = sqlite3.connect('nifty_analysis.db', check_same_thread=False)
-                cursor = conn.cursor()
-                
-                cursor.execute("SELECT COUNT(*) FROM analysis_results WHERE DATE(timestamp) = DATE('now')")
-                today_signals = cursor.fetchone()[0]
-                
-                cursor.execute("SELECT timestamp FROM analysis_results ORDER BY timestamp DESC LIMIT 1")
-                last_analysis = cursor.fetchone()
-                
-                conn.close()
-                
-                last_time = "Never" if not last_analysis else last_analysis[0]
-                
-                status_message = f"""📊 <b>Bot Status Report</b>
-
-🤖 <b>Bot:</b> Online ✅
-🌐 <b>App:</b> Running ✅  
-📡 <b>Data Source:</b> Yahoo Finance ✅
-💾 <b>Database:</b> Active ✅
-
-📈 <b>Today's Activity:</b>
-• Signals Generated: {today_signals}
-• Last Analysis: {last_time}
-• Next Analysis: Every 15 minutes
-
-🔗 <b>Web Dashboard:</b>
-https://rifty50.onrender.com
-
-⏰ <b>Server Time:</b> {datetime.now().strftime('%d/%m/%Y %H:%M:%S IST')}
-
-<i>All systems operational! 🚀</i>"""
-                
-                self.send_message_to_chat(chat_id, status_message)
-                
-            elif text.startswith('/help') or 'help' in text:
-                help_message = """ℹ️ <b>Nifty 50 Bot Help</b>
-
-<b>🤖 How it works:</b>
-• Analyzes top 15 Nifty 50 stocks every 15 minutes
-• Uses RSI, Moving Averages, and Volume indicators
-• Generates BUY/SELL signals with strength ratings
-
-<b>📊 Signal Types:</b>
-• <b>STRONG BUY:</b> RSI < 30 (Oversold)
-• <b>MEDIUM BUY:</b> Price above SMA20 with momentum
-• <b>STRONG SELL:</b> RSI > 70 (Overbought)
-• <b>MEDIUM SELL:</b> Price below SMA20 with weakness
-
-<b>⚡ Commands:</b>
-• /start - Main menu
-• /signals - Latest trading signals
-• /analyze - Immediate analysis
-• /status - Bot health check
-
-<b>🔗 Dashboard:</b>
-https://rifty50.onrender.com
-
-<b>⏰ Schedule:</b>
-• Analysis runs every 15 minutes
-• Notifications sent automatically
-• 24x7 market monitoring
-
-<i>Disclaimer: This is for educational purposes. Trade at your own risk.</i>"""
-                
-                self.send_message_to_chat(chat_id, help_message)
-                
             else:
-                # Unknown command
-                unknown_msg = """🤖 <b>I understand these commands:</b>
+                unknown_msg = """🤖 <b>Try:</b>
 
-• Type <b>"signals"</b> - Get latest trading signals
-• Type <b>"analyze"</b> - Run immediate analysis  
-• Type <b>"help"</b> - Show help information
-• Type <b>"status"</b> - Check bot status
+• /signals - Latest analysis  
+• /analyze - Run analysis
 
-Or use: /start for main menu"""
-                
+<i>Example: "/signals"</i>"""
                 self.send_message_to_chat(chat_id, unknown_msg)
                 
         except Exception as e:
@@ -262,9 +176,8 @@ Or use: /start for main menu"""
             if signals:
                 message = "✅ <b>Analysis Complete!</b>\n\n" + self.format_signals_message(signals)
             else:
-                message = "✅ <b>Analysis Complete!</b>\n\n🔍 No significant signals detected at this time."
+                message = "✅ <b>Analysis Complete!</b>\n\n🔍 No strong signals detected."
             
-            # Send result back to user
             self.send_message_to_chat(chat_id, message)
             
         except Exception as e:
@@ -342,10 +255,8 @@ Or use: /start for main menu"""
             if len(prices) < period + 1:
                 return 50.0
             
-            # Convert to list for easier handling
             price_list = list(prices)
             
-            # Calculate price changes
             deltas = []
             for i in range(1, len(price_list)):
                 deltas.append(price_list[i] - price_list[i-1])
@@ -353,11 +264,9 @@ Or use: /start for main menu"""
             if len(deltas) < period:
                 return 50.0
             
-            # Separate gains and losses
             gains = [max(delta, 0) for delta in deltas]
             losses = [abs(min(delta, 0)) for delta in deltas]
             
-            # Calculate average gains and losses
             avg_gain = sum(gains[-period:]) / period
             avg_loss = sum(losses[-period:]) / period
             
@@ -392,27 +301,14 @@ Or use: /start for main menu"""
             if data is None or data.empty or len(data) < 14:
                 return None
             
-            # Extract price data
             closes = list(data['Close'])
-            highs = list(data['High'])
-            lows = list(data['Low'])
-            volumes = list(data['Volume'])
-            
             current_price = closes[-1]
-            high_52w = max(highs)
-            low_52w = min(lows)
             
-            # Technical indicators
             rsi = self.calculate_rsi(closes)
             sma_20 = self.calculate_sma(closes, 20)
             
-            # Volume analysis
-            avg_volume = sum(volumes[-10:]) / 10 if len(volumes) >= 10 else sum(volumes) / len(volumes)
-            current_volume = volumes[-1]
-            
             signals = []
             
-            # RSI-based signals
             if rsi < 30:
                 signals.append({
                     'symbol': symbol,
@@ -432,7 +328,6 @@ Or use: /start for main menu"""
                     'timestamp': datetime.now()
                 })
             
-            # Price vs Moving Average
             price_vs_sma = (current_price / sma_20 - 1) * 100
             if price_vs_sma > 2 and rsi < 60:
                 signals.append({
@@ -509,23 +404,23 @@ Or use: /start for main menu"""
     def format_signals_message(self, all_signals):
         """Format signals for Telegram"""
         if not all_signals:
-            return "🔍 <b>Nifty 50 Analysis</b>\n\nNo significant signals detected at this time."
+            return "🔍 <b>Analysis Complete</b>\n\nNo significant signals detected at this time."
         
-        message = "🚀 <b>Nifty 50 Technical Signals</b>\n\n"
+        message = "🚀 <b>Nifty 50 Analysis</b>\n\n"
         
         buy_signals = [s for s in all_signals if s['signal_type'] == 'BUY']
         sell_signals = [s for s in all_signals if s['signal_type'] == 'SELL']
         
         if buy_signals:
             message += "📈 <b>BUY SIGNALS:</b>\n"
-            for signal in buy_signals[:5]:  # Limit to 5
+            for signal in buy_signals[:3]:
                 symbol_clean = signal['symbol'].replace(".NS", "")
                 message += f"• <b>{symbol_clean}</b> - ₹{signal['price']:.2f}\n"
                 message += f"  📝 {signal['description']} ({signal['strength']})\n\n"
         
         if sell_signals:
             message += "📉 <b>SELL SIGNALS:</b>\n"
-            for signal in sell_signals[:5]:  # Limit to 5
+            for signal in sell_signals[:3]:
                 symbol_clean = signal['symbol'].replace(".NS", "")
                 message += f"• <b>{symbol_clean}</b> - ₹{signal['price']:.2f}\n"
                 message += f"  📝 {signal['description']} ({signal['strength']})\n\n"
@@ -548,7 +443,7 @@ Or use: /start for main menu"""
                     all_signals.extend(signals)
                 
                 processed += 1
-                time.sleep(2)  # Rate limiting
+                time.sleep(2)
                 
                 if processed % 5 == 0:
                     logger.info(f"Processed {processed}/{len(self.nifty_symbols)} stocks")
@@ -606,7 +501,7 @@ def health_check():
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
         'telegram_configured': bool(analyzer.telegram_token and analyzer.telegram_chat_id),
-        'version': '3.1 - Fixed Bot'
+        'version': '3.3 - Clean Fixed Version'
     })
 
 @app.route('/api/stats')
@@ -642,48 +537,27 @@ def run_analysis_loop():
     
     while True:
         try:
-            # Run analysis every 15 minutes
             analyzer.analyze_nifty_50()
-            
-            # Sleep for 15 minutes
             time.sleep(900)
             
         except Exception as e:
             logger.error(f"Analysis loop error: {e}")
-            time.sleep(300)  # Wait 5 minutes on error
+            time.sleep(300)
 
 def main():
     """Main function"""
-    logger.info("Starting Simple Nifty 50 Bot v3.1...")
+    logger.info("Starting Enhanced Nifty 50 Bot v3.3...")
     
-    # Start background analysis
     analysis_thread = threading.Thread(target=run_analysis_loop, daemon=True)
     analysis_thread.start()
     
-    # Run initial analysis
     try:
         logger.info("Running initial analysis...")
         analyzer.analyze_nifty_50()
     except Exception as e:
         logger.error(f"Initial analysis error: {e}")
     
-    # Start Flask app
     port = int(os.environ.get('PORT', 5000))
-    logger.info(f"Starting Flask app on port {port}")
-    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
-
-if __name__ == "__main__":
-    main()
-        logger.error(f"Initial analysis error: {e}")
-    
-    # Start Flask app
-    port = int(os.environ.get('PORT', 5000))
-    logger.info(f"Starting Flask app on port {port}")
-    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
-
-if __name__ == "__main__":
-    main()
- 5000))
     logger.info(f"Starting Flask app on port {port}")
     app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
 
