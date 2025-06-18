@@ -674,3 +674,12 @@ def main():
 
 if __name__ == "__main__":
     main()
+        logger.error(f"Initial analysis error: {e}")
+    
+    # Start Flask app
+    port = int(os.environ.get('PORT', 5000))
+    logger.info(f"Starting Flask app on port {port}")
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+
+if __name__ == "__main__":
+    main()
