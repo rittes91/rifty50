@@ -683,3 +683,9 @@ if __name__ == "__main__":
 
 if __name__ == "__main__":
     main()
+ 5000))
+    logger.info(f"Starting Flask app on port {port}")
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+
+if __name__ == "__main__":
+    main()
